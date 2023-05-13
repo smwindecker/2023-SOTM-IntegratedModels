@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.HEIC
+installed_old.rda
+*.html
+integrated_models_FILL.R
+jags_mod.rds
+jags_mod.txt
+notes.rtf
+*.key
+.DS_Store
