@@ -1,5 +1,5 @@
 #' ---
-#' title: "Integrated model demo"
+#' title: "Integrated SDM - possum data"
 #' author: "Saras Windecker & David Uribe"
 #' date: "14 May, 2023"
 #' output: html_document
@@ -18,6 +18,40 @@ tree_cover <- readRDS('data/nveg_ras.rds')
 tree_cover_scaled <- scale(getValues(tree_cover))
 scale <- attr(tree_cover_scaled, 'scaled:scale')
 center <- attr(tree_cover_scaled, 'scaled:center')
+
+#' COUNT DATA
+counts <- read.csv('data/counts.csv')
+counts_sp <- SpatialPoints(counts[, c('lon', 'lat')])
+
+# visualise counts
+plot(tree_cover)
+points(counts_sp, pch = 20)
+
+# area of count data is search radius 50m. convert to sqkm here
+area_counts <- (pi * 50 ^ 2) / 1e6
+
+tree_cover_counts <- as.vector(scale(
+  extract(tree_cover, 
+          counts_sp), 
+  center = center,
+  scale = scale))
+
+#' DETECTION DATA
+det <- read.csv('data/det.csv')
+det_sp  <- SpatialPoints(det[, c('lon', 'lat')])
+
+# visualise det data
+plot(tree_cover)
+points(det_sp, pch = 20)
+
+# search radius 10m to sqkm
+area_det <- (pi * 10 ^ 2) / 1e6
+
+tree_cover_det <- as.vector(scale(
+  extract(tree_cover, 
+          det_sp), 
+  center = center,
+  scale = scale))
 
 #' PRESENCE-ONLY DATA
 po_raw <- read.csv('data/po.csv')
@@ -41,32 +75,6 @@ tree_cover_po <- as.vector(tree_cover_scaled)
 access_ras <- readRDS('data/access_ras.rds')
 access <- as.vector(scale(getValues(access_ras)))
 
-#' COUNT DATA
-counts <- read.csv('data/counts.csv')
-counts_sp <- SpatialPoints(counts[, c('lon', 'lat')])
-
-# area of count data is search radius 50m. convert to sqkm here
-area_counts <- (pi * 50 ^ 2) / 1e6
-
-tree_cover_counts <- as.vector(scale(
-  extract(tree_cover, 
-          counts_sp), 
-  center = center,
-  scale = scale))
-
-#' DETECTION DATA
-scat_det <- read.csv('data/scat_det.csv')
-scat_det_sp  <- SpatialPoints(scat_det[, c('lon', 'lat')])
-
-# scat search radius 10m to sqkm
-area_scat_det <- (pi * 10 ^ 2) / 1e6
-
-tree_cover_scat_det <- as.vector(scale(
-  extract(tree_cover, 
-          scat_det_sp), 
-  center = center,
-  scale = scale))
-
 #' predictions across whole region
 tree_cover_pred <- as.vector(tree_cover_scaled)
 access_pred <- access
@@ -74,23 +82,23 @@ access_pred <- access
 #' create jags data
 win.data <- list(
   
-  # presence-only data
-  n_po = length(po), 
-  po = po,
-  tree_cover_po = tree_cover_po, 
-  area_po = area_po,
-  access = access,
-  
   # spotlight count data
   n_counts = nrow(counts),
   counts = counts$count,
   tree_cover_counts = tree_cover_counts,
   area_counts = area_counts,
   
-  # scat data 
-  n_scat_det = nrow(scat_det),
-  tree_cover_scat_det = tree_cover_scat_det,
-  area_scat_det = area_scat_det,
+  # det data 
+  n_det = nrow(det),
+  tree_cover_det = tree_cover_det,
+  area_det = area_det,
+  
+  # presence-only data
+  n_po = length(po), 
+  po = po,
+  tree_cover_po = tree_cover_po, 
+  area_po = area_po,
+  access = access,
   
   # prediction
   n_pred = length(tree_cover_pred),
@@ -120,9 +128,6 @@ model {
   # Prior for slope in bias predictors
   beta_bias ~ dnorm(0, 0.1)
 
-  # Prior for scat detection
-  alpha_scat_det ~ dnorm(0, 0.1)
-
   ## Likelihood ##
 
   # count data of possums
@@ -133,30 +138,26 @@ model {
 
   }
 
+  # detection data
+  for (k in 1:n_det) { 
+
+    det[k] ~ dbern(prob_det[k])
+    
+    # prob_det is prob osberving 1 or more possums given expected abund possums
+    prob_det[k] <- 1 - exp(-abund_possum[k]) 
+    abund_possum[k] <- lambda_3[k]*area_det
+    log(lambda_3[k]) <- alpha + beta*tree_cover_det[k]
+    
+  }
+  
   # presence-only possum data
   for (j in 1:n_po){
 
-    po[j] ~ dpois(lambda_2[j]*area_po[j]*bias[j])
+    po[j] ~ dpois(lambda_2[j]*bias[j]*area_po[j])
     
     log(lambda_2[j]) <- alpha + beta*tree_cover_po[j] 
     log(bias[j]) <- alpha_bias + beta_bias*access[j]
    
-  }
-
-  # scat detection data
-  for (k in 1:n_scat_det) { 
-
-    scat_det[k] ~ dbern(prob_scat_det[k])
-    
-    # prob_scat_det is prob osberving 1 or more scats given expected abund scats
-    prob_scat_det[k] <- 1 - exp(-abund_scat[k]) 
-    
-    # alpha_scat_det scaling param to relate abund possums to abund scats
-    abund_scat[k] <- alpha_scat_det*abund_possum[k]
-    
-    abund_possum[k] <- lambda_3[k]*area_scat_det
-    log(lambda_3[k]) <- alpha + beta*tree_cover_scat_det[k]
-    
   }
 
   ## Derived quantities ##
@@ -177,7 +178,6 @@ sink()
 # Run JAGS, check convergence and summarize posteriors:
 out <- jagsUI::jags(data = win.data, inits = NULL,
                     parameters.to.save = c("beta", "alpha",
-                                           "alpha_scat_det",
                                            "alpha_bias", "beta_bias",
                                            "lambda_pred"),
                     model.file = "jags_mod.txt",
