@@ -7,7 +7,6 @@
 
 #' packages
 library(raster)
-library(jagsUI)
 
 #' covariate for distribution of possums
 tree_cover <- readRDS('data/nveg_ras.rds')
